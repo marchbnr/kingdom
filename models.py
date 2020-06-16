@@ -4,29 +4,33 @@ from torch.nn import functional as F
 
 class LinearModel(nn.Module):
 
-    def __init__(self, input_dim1, input_dim2, drop=0.25):
+    def __init__(self, input_dim1, input_dim2, drop=0.25, use_graph=True):
         super(LinearModel, self).__init__()
         
         # feature encoder1
         self.f1 = nn.Linear(input_dim1, 100)
         self.f1_drop = nn.Dropout(drop)
 
-        # feature encoder2
-        self.g1 = nn.Linear(input_dim2, 100)
-        self.g1_drop = nn.Dropout(drop)
-        
-        # decoder
-        self.d1 = nn.Linear(100, 100)
-        self.d2 = nn.Linear(100, input_dim2)
-        self.d_drop = nn.Dropout(drop)
-        
+        self._use_graph = use_graph
+        if use_graph:
+            # feature encoder2
+            self.g1 = nn.Linear(input_dim2, 100)
+            self.g1_drop = nn.Dropout(drop)
+            # decoder
+            self.d1 = nn.Linear(100, 100)
+            self.d2 = nn.Linear(100, input_dim2)
+            self.d_drop = nn.Dropout(drop)
+            classifier_input_dim = 200
+        else:
+            classifier_input_dim = 100
+
         # sentiment classifier
-        self.sc1 = nn.Linear(200, 10)
+        self.sc1 = nn.Linear(classifier_input_dim, 10)
         self.sc2 = nn.Linear(10, 2)
         self.sc_drop = nn.Dropout(drop)
         
         # domain classifier
-        self.dc1 = nn.Linear(200, 10)
+        self.dc1 = nn.Linear(classifier_input_dim, 10)
         self.dc2 = nn.Linear(10, 2)
         self.dc_drop = nn.Dropout(drop)
         
@@ -67,11 +71,13 @@ class LinearModel(nn.Module):
     def forward(self, input_data1, input_data2, alpha):
         
         z1 = self.encode1(input_data1)
-        z2 = self.encode2(input_data2)
-        
-        reconstructed = self.decode(z2)
-
-        z = torch.cat([z1, z2], axis=1)        
+        if self._use_graph:
+            z2 = self.encode2(input_data2)
+            z = torch.cat([z1, z2], axis=1)
+            reconstructed = self.decode(z2)
+        else:
+            z = z1
+            reconstructed = None
 
         reverse_z = ReverseLayerF.apply(z, alpha)
         class_output = self.sentiment_classifier(z)

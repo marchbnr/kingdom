@@ -19,7 +19,7 @@ def loss_ae(recon_x, x):
     return MSE
 
 
-def train_model(model, optimizer, loss_class, loss_domain, X_s1, X_s2, Y_s, X_t1, X_t2, al=1):
+def train_model(model, optimizer, loss_class, loss_domain, X_s1, X_s2, Y_s, X_t1, X_t2, al=1, use_graph=True):
     
     loss1, loss2, loss3, loss4, loss5 = [], [], [], [], []
     preds1, preds2, preds3 = [], [], []
@@ -40,9 +40,13 @@ def train_model(model, optimizer, loss_class, loss_domain, X_s1, X_s2, Y_s, X_t1
         optimizer.zero_grad()
 
         indices = permutation[i:i+batch_size]
-        
-        x_s1, x_s2, y_s, x_t1, x_t2 = X_s1[indices], X_s2[indices], Y_s[indices], X_t1[indices], X_t2[indices]
-        
+
+        x_s1, y_s, x_t1 = X_s1[indices], Y_s[ indices], X_t1[indices]
+        if use_graph:
+            x_s2, x_t2 = X_s2[indices], X_t2[indices]
+        else:
+            x_s2, x_t2 = None, None
+
         y_s_domain = torch.zeros(batch_size).long()
         y_t_domain = torch.ones(batch_size).long()
         
@@ -56,10 +60,16 @@ def train_model(model, optimizer, loss_class, loss_domain, X_s1, X_s2, Y_s, X_t1
         loss_class_s = loss_class(y_s_pred, y_s)
         loss_domain_s = loss_domain(y_s_domain_pred, y_s_domain)
         loss_domain_t = loss_domain(y_t_domain_pred, y_t_domain)
-        loss_recon_s = loss_ae(recon_s2, x_s2)
-        loss_recon_t = loss_ae(recon_t2, x_t2)
-        
-        loss = loss_class_s + loss_recon_s + loss_recon_t + loss_domain_s + loss_domain_t
+        loss = loss_class_s + loss_domain_s + loss_domain_t
+
+        if use_graph:
+            loss_recon_s = loss_ae(recon_s2, x_s2)
+            loss_recon_t = loss_ae(recon_t2, x_t2)
+            loss += loss_recon_s + loss_recon_t
+        else:
+            assert recon_s2 is None, 'Without graph no reconstruction should be returned'
+            assert recon_t2 is None, 'Without graph no reconstruction should be returned'
+
         loss.backward()
         optimizer.step()
         
@@ -74,8 +84,9 @@ def train_model(model, optimizer, loss_class, loss_domain, X_s1, X_s2, Y_s, X_t1
         loss1.append(loss_class_s.item())
         loss2.append(loss_domain_s.item())
         loss3.append(loss_domain_t.item())
-        loss4.append(loss_recon_s.item())
-        loss5.append(loss_recon_t.item())
+        if use_graph:
+            loss4.append(loss_recon_s.item())
+            loss5.append(loss_recon_t.item())
         
     preds1, preds2, preds3  = np.concatenate(preds1), np.concatenate(preds2), np.concatenate(preds3)
     labels1, labels2, labels3 = np.concatenate(labels1), np.concatenate(labels2), np.concatenate(labels3)
@@ -87,8 +98,9 @@ def train_model(model, optimizer, loss_class, loss_domain, X_s1, X_s2, Y_s, X_t1
     avg_loss1 = round(np.mean(np.array(loss1)), 4)
     avg_loss2 = round(np.mean(np.array(loss2)), 4)
     avg_loss3 = round(np.mean(np.array(loss3)), 4)
-    avg_loss4 = round(np.mean(np.array(loss4)), 4)
-    avg_loss5 = round(np.mean(np.array(loss5)), 4)
+    if use_graph:
+        avg_loss4 = round(np.mean(np.array(loss4)), 4)
+        avg_loss5 = round(np.mean(np.array(loss5)), 4)
         
     # print ('Source sentiment loss: {a}, domain loss: {b}, recons loss: {c}, sentiment acc: {d}, domain acc: {e}'.format(
     #        a = avg_loss1, b = avg_loss2, c = avg_loss4, d = avg_acc1, e = avg_acc2))
@@ -97,7 +109,7 @@ def train_model(model, optimizer, loss_class, loss_domain, X_s1, X_s2, Y_s, X_t1
     #        a = avg_loss3, b = avg_loss5, c = avg_acc3))
         
         
-def eval_model(model, loss_class, loss_domain, X_t1, X_t2, Y_t):
+def eval_model(model, loss_class, loss_domain, X_t1, X_t2, Y_t, use_graph=True):
         
     model.eval()
     Y_t_domain = torch.ones(len(Y_t)).long()
@@ -109,7 +121,10 @@ def eval_model(model, loss_class, loss_domain, X_t1, X_t2, Y_t):
         
     loss1 = round(loss_class(Y_t_pred, Y_t).item(), 4)
     loss2 = round(loss_domain(Y_t_domain_pred, Y_t_domain).item(), 4)
-    loss3 = round(loss_ae(recon_t2, X_t2).item(), 4)
+    if use_graph:
+        loss3 = round(loss_ae(recon_t2, X_t2).item(), 4)
+    else:
+        assert recon_t2 is None, 'Without graph no reconstruction should be returned'
     
     preds1 = torch.argmax(Y_t_pred, 1).data.cpu().numpy()
     preds2 = torch.argmax(Y_t_domain_pred, 1).data.cpu().numpy()
@@ -132,6 +147,7 @@ if __name__ == '__main__':
     parser.add_argument('--no-cuda', action='store_true', default=False, help='does not use GPU')
     parser.add_argument('--batch-size', type=int, default=40, metavar='BS', help='batch size')
     parser.add_argument('--epochs', type=int, default=100, metavar='E', help='number of epochs')
+    parser.add_argument('--skip-graph', action='store_true', default=False, help='only run dann+')
     parser.add_argument('--lr', type=float, default=1e-4, metavar='LR', help='learning rate')
     args = parser.parse_args()
     print(args)
@@ -154,6 +170,8 @@ if __name__ == '__main__':
         use_cuda = True
     else:
         use_cuda = False
+
+    use_graph = not args.skip_graph
 
     loss_class = torch.nn.CrossEntropyLoss()
     loss_domain = torch.nn.CrossEntropyLoss()
@@ -179,9 +197,10 @@ if __name__ == '__main__':
             Y_t2 = torch.LongTensor(Y_t2)
         
             # Graph features
-            X_s_ = np.load(open('graph_features/sf_' + d1 +'_small_5000.np', 'rb'), allow_pickle=True)
-            X_t1_ = np.load(open('graph_features/sf_' + d2 + '_small_5000.np', 'rb'), allow_pickle=True)
-            X_t2_ = np.load(open('graph_features/sf_'+ d2 + '_test_5000.np', 'rb'), allow_pickle=True)
+            if use_graph:
+                X_s_ = np.load(open('graph_features/sf_' + d1 +'_small_5000.np', 'rb'), allow_pickle=True)
+                X_t1_ = np.load(open('graph_features/sf_' + d2 + '_small_5000.np', 'rb'), allow_pickle=True)
+                X_t2_ = np.load(open('graph_features/sf_'+ d2 + '_test_5000.np', 'rb'), allow_pickle=True)
         
             if transform:
 
@@ -189,33 +208,39 @@ if __name__ == '__main__':
                 X_s  = torch.tensor(np.log(1 + np.array(X_s.todense()).astype('float32'))/c)
                 X_t1 = torch.tensor(np.log(1 + np.array(X_t1.todense()).astype('float32'))/c)
                 X_t2 = torch.tensor(np.log(1 + np.array(X_t2.todense()).astype('float32'))/c)
-            
-                X_s_ = torch.sigmoid(torch.tensor(X_s_)).type(torch.FloatTensor)
-                X_t1_ = torch.sigmoid(torch.tensor(X_t1_)).type(torch.FloatTensor)
-                X_t2_ = torch.sigmoid(torch.tensor(X_t2_)).type(torch.FloatTensor)
+
+                if use_graph:
+                    X_s_ = torch.sigmoid(torch.tensor(X_s_)).type(torch.FloatTensor)
+                    X_t1_ = torch.sigmoid(torch.tensor(X_t1_)).type(torch.FloatTensor)
+                    X_t2_ = torch.sigmoid(torch.tensor(X_t2_)).type(torch.FloatTensor)
         
             else:
             
                 X_s  = torch.tensor(np.array(X_s.todense()).astype('float32'))
                 X_t1 = torch.tensor(np.array(X_t1.todense()).astype('float32'))
                 X_t2 = torch.tensor(np.array(X_t2.todense()).astype('float32'))
-            
-                X_s_ = torch.tensor(X_s_).type(torch.FloatTensor)
-                X_t1_ = torch.tensor(X_t1_).type(torch.FloatTensor)
-                X_t2_ = torch.tensor(X_t2_).type(torch.FloatTensor)
+
+                if use_graph:
+                    X_s_ = torch.tensor(X_s_).type(torch.FloatTensor)
+                    X_t1_ = torch.tensor(X_t1_).type(torch.FloatTensor)
+                    X_t2_ = torch.tensor(X_t2_).type(torch.FloatTensor)
             
             if use_cuda:
                 X_s, X_t1, X_t2,  = X_s.cuda(), X_t1.cuda(), X_t2.cuda()
                 Y_s, Y_t1, Y_t2,  = Y_s.cuda(), Y_t1.cuda(), Y_t2.cuda()
-                X_s_, X_t1_, X_t2_ = X_s_.cuda(), X_t1_.cuda(), X_t2_.cuda()
-        
+                if use_graph:
+                    X_s_, X_t1_, X_t2_ = X_s_.cuda(), X_t1_.cuda(), X_t2_.cuda()
+
+            if not use_graph:
+                X_s_, X_t1_, X_t2_ = None, None, None
+
             all_accs = []
             maxa = 0
         
             for _ in range(2):
                 for dr in dropouts:
                     for al in alphas:
-                        model = LinearModel(bow_size, graph_size, dr)
+                        model = LinearModel(bow_size, graph_size, dr, use_graph=use_graph)
                         if use_cuda:
                             model = model.cuda()
                         optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -224,8 +249,8 @@ if __name__ == '__main__':
                 
                         accs, loss = [], []
                         for epoch in range(n_epochs):
-                            train_model(model, optimizer, loss_class, loss_domain, X_s, X_s_, Y_s, X_t1, X_t1_, al)
-                            acc, l = eval_model(model, loss_class, loss_domain, X_t2, X_t2_, Y_t2)
+                            train_model(model, optimizer, loss_class, loss_domain, X_s, X_s_, Y_s, X_t1, X_t1_, al, use_graph=use_graph)
+                            acc, l = eval_model(model, loss_class, loss_domain, X_t2, X_t2_, Y_t2, use_graph=use_graph)
                             accs.append(acc)
                             loss.append(l)    
                     
@@ -234,13 +259,15 @@ if __name__ == '__main__':
                     
                         del model, optimizer
                         gc.collect()
-                    
+
+                        print('Results: Acc: {a}, Loss: {b}, LR: {c}, Dropout: {d}, alpha: {e}'
+                                .format(a=max_acc, b=loss[accs.index(max_acc)],
+                                        c=lr, d=dr, e=al))
                         if max_acc > maxa:
                             params = {'lr': lr, 'dr': dr, 'alpha': al}
                             maxa = max_acc
-                            print ('Results: Acc: {a}, Loss: {b}, LR: {c}, Dropout: {d}, alpha: {e}'
-                                    .format(a = max_acc, b = loss[accs.index(max_acc)], c = lr, d = dr, e = al))
-                            
+
+            print ('-'*70)
             print (d1, d2, str(max(all_accs)))
             print ('Best results at:', params)
             print ('-'*70)
